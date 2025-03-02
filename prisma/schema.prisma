@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Utilizator {
+  id             Int      @id @default(autoincrement())
+  email          String   @unique
+  parola         String
+  nume           String   @unique
+  avatar         String?
+  statut         String   @default("In Review")
+  tip            String
+  evaluare       Float    @default(0)
+  total_evaluare Int      @default(0)
+  data_crearii   DateTime @default(now())
+
+  vehicule  Vehicul[]
+  feedbacks Feedback[]
+  rezervari Rezervare[]
+}
+
+model Vehicul {
+  id           Int      @id @default(autoincrement())
+  nume         String
+  model        String
+  numar        String
+  culoare      String
+  capacitate   Int
+  data_crearii DateTime @default(now())
+  soferId      Int
+
+  sofer     Utilizator  @relation(fields: [soferId], references: [id])
+  rezervari Rezervare[]
+  Traseu    Traseu[]
+}
+
+model Feedback {
+  id           Int      @id @default(autoincrement())
+  evaluare     Float
+  descriere    String
+  data_crearii DateTime @default(now())
+  utilizatorId Int
+  creator      String
+
+  utilizator Utilizator @relation(fields: [utilizatorId], references: [id])
+}
+
+model Rezervare {
+  id           Int      @id @default(autoincrement())
+  data_crearii DateTime @default(now())
+  traseuId     Int
+  utilizatorId Int
+  vehiculId    Int?
+  statut       String
+
+  utilizator Utilizator @relation(fields: [utilizatorId], references: [id])
+  traseu     Traseu     @relation(fields: [traseuId], references: [id])
+  vehicul    Vehicul?   @relation(fields: [vehiculId], references: [id])
+  plata      Plata?
+}
+
+model Plata {
+  id           Int      @id @default(autoincrement())
+  metoda       String
+  suma         Int
+  data_crearii DateTime @default(now())
+  rezervareId  Int      @unique
+
+  rezervare Rezervare @relation(fields: [rezervareId], references: [id])
+}
+
+model Traseu {
+  id           Int      @id @default(autoincrement())
+  durata       Int
+  data_crearii DateTime @default(now())
+  oraStart     DateTime
+  vehiculId    Int?
+
+  vehicul    Vehicul?     @relation(fields: [vehiculId], references: [id])
+  rezervari  Rezervare[]
+  coordonate Coordonate[]
+}
+
+model Coordonate {
+  id       Int   @id @default(autoincrement())
+  lat      Float
+  long     Float
+  traseuId Int
+
+  traseu Traseu @relation(fields: [traseuId], references: [id])
+}
