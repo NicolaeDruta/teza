@@ -5,9 +5,10 @@ import { PrismaModule } from './common/prisma/prisma.module';
 import { UtilizatorModule } from './utilizator/utilizator.module';
 import { TraseuModule } from './traseu/traseu.module';
 import { VehiculModule } from './vehicul/vehicul.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
-  imports: [PrismaModule, UtilizatorModule, TraseuModule, VehiculModule],
+  imports: [PrismaModule, UtilizatorModule, TraseuModule, VehiculModule, ScheduleModule.forRoot()],
   controllers: [AppController],
   providers: [AppService],
 })

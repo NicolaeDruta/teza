@@ -17,43 +17,61 @@ export class UtilizatorService {
     try {
       const hashedPassword = await bcrypt.hash(createUserDto.parola, 10);
 
-      return await this.prisma.utilizator.create({
+      const user = await this.prisma.utilizator.create({
         data: {
           ...createUserDto,
           parola: hashedPassword,
           statut: createUserDto.tip === "Pasager" ? "Active" : "In Review",
         },
       });
+
+      return { message: 'User created successfully', user };
     } catch (error) {
-      throw new NotFoundException('Unable to create user');
+      console.error('Error creating user:', error); // Log the actual error
+      // throw new InternalServerErrorException('Unable to create user');
     }
   }
 
   async login(nume: string, parola: string) {
-    const user = await this.prisma.utilizator.findUnique(
-      { where: { nume } }
-    );
+    console.log(`[${new Date().toISOString()}] Starting login process for user: ${nume}`);
+
+    // Find the user by username
+    const user = await this.prisma.utilizator.findUnique({ where: { nume } });
+    console.log(`[${new Date().toISOString()}] User lookup completed. User found: ${user ? 'Yes' : 'No'}`);
 
     if (!user) {
+      console.log(`[${new Date().toISOString()}] User not found, throwing NotFoundException.`);
       throw new NotFoundException('User not found');
     }
 
+    // Compare the provided password with the stored hashed password
     const isPasswordValid = await bcrypt.compare(parola, user.parola);
+    console.log(`[${new Date().toISOString()}] Password comparison result: ${isPasswordValid}`);
+
     if (!isPasswordValid) {
+      console.log(`[${new Date().toISOString()}] Password invalid, throwing UnauthorizedException.`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // Prepare payload for JWT
     const payload = { userId: user.id, username: user.nume };
+    console.log(`[${new Date().toISOString()}] JWT payload prepared: ${JSON.stringify(payload)}`);
 
+    // Sign the JWT token with the specified secret and expiry time
     const token = this.jwtService.sign(payload, {
       secret: process.env.JWT_SECRET || 'yourSecretKeyHere',
       expiresIn: '1h',
     });
+    console.log(`[${new Date().toISOString()}] JWT token generated.`);
 
-    await this.emailService.sendLoginNotification(user.email, user.nume);
+    // Send a login notification email
+    this.emailService.sendLoginNotification(user.email, user.nume);
+    console.log(`[${new Date().toISOString()}] Login notification email sent to ${user.email}.`);
 
-    return { message: 'Login successful', token };
+    console.log(`[${new Date().toISOString()}] Login process completed successfully.`);
+    return { message: 'Login successful', token, userType: user.tip };
   }
+
 
   async getUserByToken(token: string) {
     try {

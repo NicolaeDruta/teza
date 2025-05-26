@@ -19,6 +19,7 @@ export class TraseuService {
     }
 
     const durata = await this.openRoute.getRouteDuration(data.coordonate);
+    console.log(new Date(data.oraStart))
 
     return this.prisma.traseu.create({
       data: {

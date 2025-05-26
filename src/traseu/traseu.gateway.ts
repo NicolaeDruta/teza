@@ -11,6 +11,12 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { OpenRouteService } from '../common/openroute/openroute.service';
 import * as geolib from 'geolib';
+import Stripe from 'stripe';
+import { Cron } from '@nestjs/schedule';
+
+
+const stripe = new Stripe(String(process.env.STRIPE_SECRET_KEY), { apiVersion: '2025-02-24.acacia' });
+
 
 @WebSocketGateway({ cors: true })
 export class TraseuGateway {
@@ -91,10 +97,11 @@ export class TraseuGateway {
       stop: { lat: number; long: number };
       token: string;
       localtime: string;
+      paymentType: 'card' | 'cash';
     },
     @ConnectedSocket() client: Socket
   ) {
-    console.log(`🔍 Passenger searches for a route: start=${JSON.stringify(data.start)}, stop=${JSON.stringify(data.stop)}`);
+    console.log(`🔍 Passenger searches for a route: start=${JSON.stringify(data.start)}, stop=${JSON.stringify(data.stop)}, time=${data.localtime}`);
 
     // ✅ Validate Token & Get User
     let user;
@@ -123,7 +130,7 @@ export class TraseuGateway {
     // ✅ Get All Routes Without Evaluare Filtering
     const potentialTrasee = await this.prisma.traseu.findMany({
       where: {
-        oraStart: { gte: userUTC.toISOString(), lte: maxStartTimeUTC.toISOString() },
+        // oraStart: { gte: userUTC.toISOString(), lte: maxStartTimeUTC.toISOString() },
         vehicul: { isNot: null },
       },
       include: { coordonate: true, rezervari: true, vehicul: { include: { sofer: true } } },
@@ -209,6 +216,7 @@ export class TraseuGateway {
       id: firstMatchingRoute.id,
       passenger: { id: user.id, name: user.nume, price: optimizedRoute * 1.5 },
       optimisedRoute: passengerRoute,
+      paymentType: data.paymentType,
     });
 
     // 🟢 LISTEN FOR DRIVER'S RESPONSE
@@ -226,7 +234,7 @@ export class TraseuGateway {
    */
   @SubscribeMessage('acceptOffer')
   async handleAcceptedOffer(
-    @MessageBody() data: { driverId: number; passengerId: number; accepted: boolean, routeId: number, start: { lat: number; long: number }, stop: { lat: number; long: number } },
+    @MessageBody() data: { driverId: number; passengerId: number; accepted: boolean, routeId: number, start: { lat: number; long: number }, stop: { lat: number; long: number }, price: number, paymentType: 'card' | 'cash' },
     @ConnectedSocket() client: Socket
   ) {
     console.log(`🚗 Driver ${data.driverId} responded to the offer.`);
@@ -237,9 +245,14 @@ export class TraseuGateway {
     }
 
     const passengerSocketId = this.passengerSockets.get(data.passengerId);
+    const driverSocketId = this.driverSockets.get(data.driverId);
 
     if (!passengerSocketId) {
       client.emit('acceptedOffer', { success: false, message: 'Passenger not available.' });
+      return;
+    }
+
+    if (!driverSocketId) {
       return;
     }
 
@@ -260,11 +273,30 @@ export class TraseuGateway {
         data: {
           utilizatorId: data.passengerId,
           traseuId: data.routeId,
-          statut: "Acceptat"
+          statut: "Acceptat",
         },
       });
 
-      console.log(`🎟 Reservation Created: ID=${newReservation.id}`);
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: data.price * 100, // Convert to cents
+        currency: 'ron',
+        payment_method_types: ['card'],
+        payment_method: 'pm_card_visa',
+        capture_method: 'automatic',
+        confirm: true
+      });
+
+      const newPayment = await this.prisma.plata.create({
+        data: {
+          metoda: data.paymentType,
+          suma: data.price,
+          rezervareId: newReservation.id,
+          statut: "Asteptare",
+          paymentIntentId: paymentIntent.id,
+        }
+      })
+
+      console.log(`🎟 Reservation Created: ID=${newReservation.id} PaymentID=${newPayment.id}`);
 
       // ✅ 2. Update the route with the passenger's start & stop
       await this.prisma.coordonate.createMany({
@@ -281,6 +313,14 @@ export class TraseuGateway {
         success: true,
         message: 'Ride confirmed!',
         reservation: newReservation,
+        payment: newPayment,
+      });
+
+      this.server.to(driverSocketId).emit('acceptOffer', {
+        success: true,
+        message: 'Ride confirmed!',
+        reservation: newReservation,
+        payment: newPayment,
       });
 
       this.ongoingRides.set(data.driverId, data.passengerId);
@@ -322,48 +362,78 @@ export class TraseuGateway {
 
   @SubscribeMessage('terminateOffer')
   async handleTerminateOffer(
-    @MessageBody() data: { driverId: number },
+    @MessageBody() data: { driverId: number, reservationId: number },
     @ConnectedSocket() client: Socket
   ) {
     console.log(`🚗 Driver ${data.driverId} is terminating the ride.`);
 
-    // Get the passenger associated with this ride
     const passengerId = this.ongoingRides.get(data.driverId);
     if (!passengerId) {
-      console.warn(`❌ No active ride found for driver ${data.driverId}`);
       client.emit('terminateOffer', { success: false, message: 'No active ride found.' });
       return;
     }
 
     try {
+      // ✅ Retrieve reservation and payment
+      const reservation = await this.prisma.rezervare.findFirst({
+        where: { id: data.reservationId },
+        include: { plata: true },
+      });
+
+      if (!reservation) {
+        client.emit('terminateOffer', { success: false, message: 'No reservation found.' });
+        return;
+      }
+
+      // ✅ Process payment if method is "card"
+      if (reservation.plata?.metoda === 'card') {
+        console.log(`💳 Processing card payment for reservation ID=${reservation.id}`);
+
+        if (!reservation.plata.paymentIntentId) {
+          console.error(`❌ No PaymentIntent ID found for reservation ${reservation.id}`);
+          client.emit('terminateOffer', { success: false, message: 'Payment method missing.' });
+          return;
+        }
+
+        // ✅ Retrieve PaymentIntent
+        const paymentIntent = await stripe.paymentIntents.retrieve(reservation.plata.paymentIntentId);
+
+        if (!paymentIntent.payment_method) {
+          console.error(`❌ Payment method missing for PaymentIntent ${paymentIntent.id}`);
+          client.emit('terminateOffer', {
+            success: false,
+            message: 'Payment method missing. Please provide card details.'
+          });
+          return;
+        }
+
+        console.log(`✅ Payment Successful`);
+
+        // ✅ Update payment status
+        await this.prisma.plata.update({
+          where: { id: reservation.plata.id },
+          data: { statut: "Finalizat" },
+        });
+      }
+
       // ✅ Update the reservation status to "Terminata"
-      await this.prisma.rezervare.updateMany({
-        where: {
-          utilizatorId: passengerId,
-          traseu: {
-            vehicul: { soferId: data.driverId },
-          },
-          statut: "Acceptat",
-        },
-        data: {
-          statut: "Terminata",
-        },
+      await this.prisma.rezervare.update({
+        where: { id: reservation.id },
+        data: { statut: "Terminata" },
       });
 
       console.log(`✅ Ride terminated. Reservation updated to "Terminata".`);
 
-      // ✅ Notify the passenger that the ride is over
+      // ✅ Notify the passenger
       const passengerSocketId = this.passengerSockets.get(passengerId);
       if (passengerSocketId) {
         this.server.to(passengerSocketId).emit('terminateOffer', {
           success: true,
           message: 'Your ride has been completed.',
         });
-      } else {
-        console.warn(`❌ Passenger ${passengerId} is not connected.`);
       }
 
-      // ✅ Remove the ride from the ongoing rides list
+      // ✅ Remove ride from active rides
       this.ongoingRides.delete(data.driverId);
 
     } catch (error) {

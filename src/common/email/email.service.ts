@@ -19,8 +19,8 @@ export class EmailService {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: email,
-      subject: 'New Login Alert',
-      text: `Hello ${username},\n\nWe noticed a new login to your account. If this was not you, please change your password immediately.\n\nBest regards,\nYour Security Team`,
+      subject: 'Nouă Alertă de Autentificare',
+      text: `Bună ${username},\n\nAm observat o nouă autentificare în contul dvs. Dacă nu ați fost dvs., vă rugăm să vă schimbați imediat parola.\n\nCu respect,\nEchipa de Securitate`,
     };
 
     try {

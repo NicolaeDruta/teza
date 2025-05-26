@@ -8,13 +8,13 @@ export class VehiculController {
 
   @Post('')
   async createVehicul(
-    @Query('token') token: string,
+    @Query('id') id: string,
     @Body() createVehiculDto: CreateVehiculDto
   ) {
-    if (!token) {
-      throw new UnauthorizedException('Token lipsă');
+    if (!id) {
+      throw new UnauthorizedException('Id utilizator lipsă');
     }
 
-    return this.vehiculService.create(createVehiculDto, token);
+    return this.vehiculService.create(createVehiculDto, id);
   }
 }

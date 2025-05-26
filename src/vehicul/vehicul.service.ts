@@ -10,12 +10,9 @@ export class VehiculService {
     private readonly utilizator: UtilizatorService
   ) {}
 
-  async create(data: CreateVehiculDto, token: string) {
-    const user = await this.utilizator.getUserByToken(token);
-    const soferId = user.id;
-
+  async create(data: CreateVehiculDto, soferId: string) {
     const existingVehicul = await this.prisma.vehicul.findFirst({
-      where: { soferId },
+      where: { soferId: Number(soferId) },
     });
 
     if (existingVehicul) {
@@ -23,7 +20,7 @@ export class VehiculService {
     }
 
     return this.prisma.vehicul.create({
-      data: { ...data, soferId },
+      data: { ...data, soferId: Number(soferId) },
     });
   }
 }
